@@ -1,0 +1,130 @@
+name: Compilar Ejecutable Windows (.EXE)
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows-exe:
+    runs-on: windows-latest
+    steps:
+      - name: Descargar codigo del repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Descargar librerias locales vendor (Modo 100% Offline)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path vendor | Out-Null
+          Invoke-WebRequest -Uri "https://cdn.tailwindcss.com" -OutFile "vendor/tailwind.js"
+          Invoke-WebRequest -Uri "https://unpkg.com/lucide@latest/dist/umd/lucide.min.js" -OutFile "vendor/lucide.min.js"
+
+      - name: Generar archivos base de Electron (package.json y electron-main.js)
+        shell: pwsh
+        run: |
+          $pkg = @'
+          {
+            "name": "presupuest-arg",
+            "version": "1.0.0",
+            "description": "Sistema de Presupuestos de Obra y Computo de Materiales",
+            "main": "electron-main.js",
+            "scripts": {
+              "start": "electron .",
+              "dist": "electron-builder --win"
+            },
+            "build": {
+              "appId": "com.llanosconstrucciones.presupuestarg",
+              "productName": "Presupuest-Arg",
+              "files": [
+                "index.html",
+                "electron-main.js",
+                "manifest.webmanifest",
+                "sw.js",
+                "icons/**/*",
+                "vendor/**/*"
+              ],
+              "win": {
+                "target": [
+                  { "target": "nsis", "arch": ["x64"] },
+                  { "target": "portable", "arch": ["x64"] }
+                ],
+                "icon": "icons/icon-512.png"
+              },
+              "nsis": {
+                "oneClick": false,
+                "allowToChangeInstallationDirectory": true,
+                "createDesktopShortcut": true,
+                "createStartMenuShortcut": true,
+                "artifactName": "Presupuest-Arg-Instalador.exe"
+              },
+              "portable": {
+                "artifactName": "Presupuest-Arg-Portable.exe"
+              }
+            },
+            "devDependencies": {
+              "electron": "^30.0.0",
+              "electron-builder": "^24.13.3"
+            }
+          }
+          '@
+          Set-Content -Path "package.json" -Value $pkg -Encoding UTF8
+
+          $mainJs = @'
+          const { app, BrowserWindow } = require('electron');
+          const path = require('path');
+
+          function createWindow() {
+            const win = new BrowserWindow({
+              width: 1440,
+              height: 900,
+              minWidth: 380,
+              minHeight: 600,
+              title: 'Presupuest-Arg',
+              icon: path.join(__dirname, 'icons', 'icon-512.png'),
+              autoHideMenuBar: true,
+              webPreferences: {
+                nodeIntegration: false,
+                contextIsolation: true
+              }
+            });
+            win.loadFile('index.html');
+          }
+
+          app.whenReady().then(createWindow);
+          app.on('window-all-closed', () => {
+            if (process.platform !== 'darwin') app.quit();
+          });
+          '@
+          Set-Content -Path "electron-main.js" -Value $mainJs -Encoding UTF8
+
+      - name: Instalar Electron y Compilar .EXE
+        run: |
+          npm install
+          npm run dist
+
+      - name: Subir Ejecutables .EXE en pestaña Actions
+        uses: actions/upload-artifact@v4
+        with:
+          name: Presupuest-Arg-Windows-EXE
+          path: dist/*.exe
+
+      - name: Publicar .EXE en GitHub Releases (Genera enlace de descarga directa)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.0
+          name: Presupuest-Arg v1.0.0 (App Descargable Windows)
+          files: |
+            dist/Presupuest-Arg-Instalador.exe
+            dist/Presupuest-Arg-Portable.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
