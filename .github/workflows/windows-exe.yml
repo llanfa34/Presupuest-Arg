@@ -1,4 +1,4 @@
-name: Generar instalador Windows (.exe)
+name: instalador (.exe)
 
 on:
   workflow_dispatch:
