@@ -432,6 +432,15 @@
   </div>
 
   <!-- Main Workspace -->
+  <!-- Barra de archivo: Nuevo, Abrir, Guardar (en el archivo abierto) y Guardar como -->
+  <div class="no-print bg-white border-b border-slate-200 px-3 sm:px-6 lg:px-8 py-2 flex flex-wrap items-center gap-2">
+    <button type="button" onclick="newBudget()" class="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs rounded-lg border border-slate-300">Nuevo</button>
+    <button type="button" onclick="openBudget()" class="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs rounded-lg border border-slate-300">Abrir…</button>
+    <button type="button" onclick="saveBudget()" class="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs rounded-lg">Guardar</button>
+    <button type="button" onclick="saveAsBudget()" class="px-3 py-1.5 bg-white hover:bg-slate-100 text-slate-800 font-bold text-xs rounded-lg border border-slate-300">Guardar como…</button>
+    <span id="fileBarStatus" class="ml-auto text-xs text-slate-600 truncate max-w-full"></span>
+    <input type="file" id="budgetFileInput" accept=".json,application/json" class="hidden" onchange="onBudgetFileChosen(event)">
+  </div>
   <main class="flex-1 max-w-[1600px] w-full mx-auto px-3 sm:px-6 lg:px-8 py-4">
 
     <!-- =================================================================== -->
@@ -517,7 +526,7 @@
             </div>
             <div class="flex flex-wrap items-center gap-2">
               <button type="button" onclick="saveCurrentProjectToHistory()" class="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black rounded-lg shadow-sm flex items-center gap-1.5 cursor-pointer">
-                <i data-lucide="save" class="w-3.5 h-3.5"></i> Guardar Obra Actual
+                <i data-lucide="save" class="w-3.5 h-3.5"></i> Guardar en Historial
               </button>
               <button type="button" onclick="exportProjectFileJson()" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-white font-bold rounded-lg flex items-center gap-1.5 cursor-pointer">
                 <i data-lucide="download" class="w-3.5 h-3.5 text-brand-400"></i> Exportar Obra (.json)
@@ -2414,7 +2423,7 @@
       const val = (id) => document.getElementById(id)?.value ?? '';
       const chk = (id) => document.getElementById(id)?.checked ?? false;
       return {
-        id: 'obra_' + Date.now(),
+        id: currentWorkId || ('obra_' + Date.now()),
         savedAt: new Date().toLocaleString('es-AR'),
         client: val('projClient') || 'Obra sin nombre',
         location: val('projLocation') || '',
@@ -2521,12 +2530,13 @@
 
     function saveCurrentProjectToHistory() {
       const snap = captureCurrentProjectSnapshot();
-      const existingIdx = savedProjectsHistory.findIndex(p => p.client.toLowerCase() === snap.client.toLowerCase() && snap.client !== 'Obra sin nombre');
+      const existingIdx = savedProjectsHistory.findIndex(p => p.id === snap.id);
       if (existingIdx >= 0) {
         savedProjectsHistory[existingIdx] = snap;
       } else {
         savedProjectsHistory.unshift(snap);
       }
+      currentWorkId = snap.id;
       try {
         localStorage.setItem('presupuest_arg_saved_projects_v1', JSON.stringify(savedProjectsHistory));
       } catch (e) {}
@@ -2540,7 +2550,10 @@
 
     function loadSavedProjectById(id) {
       const found = savedProjectsHistory.find(p => p.id === id);
-      if (found) applyProjectSnapshotToWorkspace(found);
+      if (found) {
+        applyProjectSnapshotToWorkspace(found);
+        currentWorkId = found.id;
+      }
     }
 
     function duplicateSavedProjectById(id) {
@@ -5194,17 +5207,158 @@
       catch (e) { console.warn('No se pudo autoguardar el trabajo:', e); }
     }
     function scheduleWorkSave() {
+      workDirty = true;
+      updateFileBar();
       clearTimeout(workSaveTimer);
       workSaveTimer = setTimeout(saveWorkNow, 400);
     }
     function restoreWorkFromStorage() {
       try {
         const raw = localStorage.getItem(WORK_STORAGE_KEY);
-        if (raw) applyProjectSnapshotToWorkspace(JSON.parse(raw));
+        if (raw) {
+          applyProjectSnapshotToWorkspace(JSON.parse(raw));
+          workDirty = true;
+          updateFileBar();
+        }
       } catch (e) { console.warn('No se pudo restaurar el trabajo guardado:', e); }
     }
     document.addEventListener('input', scheduleWorkSave);
     document.addEventListener('change', scheduleWorkSave);
+
+    // =========================================================================
+    // ARCHIVO DE TRABAJO (como Word): "Guardar" escribe en el archivo abierto,
+    // "Guardar como" crea otro, "Nuevo" empieza de cero. Si el navegador no permite
+    // elegir archivos, se descarga el .json con el mismo nombre.
+    // =========================================================================
+    let currentFileHandle = null;
+    let currentFileName = '';
+    let currentWorkId = null;
+    let workDirty = false;
+    const BUDGET_FILE_TYPES = [{ description: 'Presupuesto', accept: { 'application/json': ['.json'] } }];
+    const canPickFiles = () => typeof window.showSaveFilePicker === 'function' && typeof window.showOpenFilePicker === 'function';
+
+    function budgetJsonText() {
+      return JSON.stringify(captureCurrentProjectSnapshot(), null, 2);
+    }
+    function suggestedBudgetName() {
+      const client = (document.getElementById('projClient')?.value || '').trim() || 'obra';
+      return `Presupuesto_${client.replace(/[^a-z0-9_-]/gi, '_')}.json`;
+    }
+    function updateFileBar() {
+      const el = document.getElementById('fileBarStatus');
+      if (!el) return;
+      if (!currentFileName) {
+        el.textContent = workDirty ? 'Sin archivo · cambios sin guardar' : 'Sin archivo';
+        return;
+      }
+      el.textContent = `${currentFileName} · ${workDirty ? 'cambios sin guardar' : 'guardado'}`;
+    }
+    function markBudgetSaved() {
+      workDirty = false;
+      updateFileBar();
+      saveWorkNow();
+    }
+    function downloadBudget(name) {
+      const url = URL.createObjectURL(new Blob([budgetJsonText()], { type: 'application/json' }));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      currentFileName = name;
+      currentFileHandle = null;
+      markBudgetSaved();
+    }
+    async function writeBudgetTo(handle) {
+      const w = await handle.createWritable();
+      await w.write(budgetJsonText());
+      await w.close();
+    }
+    async function saveAsBudget() {
+      const name = suggestedBudgetName();
+      if (canPickFiles()) {
+        try {
+          const handle = await window.showSaveFilePicker({ suggestedName: name, types: BUDGET_FILE_TYPES });
+          await writeBudgetTo(handle);
+          currentFileHandle = handle;
+          currentFileName = handle.name;
+          markBudgetSaved();
+          return;
+        } catch (err) {
+          if (err && err.name === 'AbortError') return;
+        }
+      }
+      downloadBudget(name);
+    }
+    async function saveBudget() {
+      if (currentFileHandle) {
+        try {
+          await writeBudgetTo(currentFileHandle);
+          markBudgetSaved();
+          return;
+        } catch (err) {
+          alert('No se pudo escribir en el archivo abierto. Elegí dónde guardarlo.');
+          currentFileHandle = null;
+        }
+      }
+      if (!canPickFiles() && currentFileName) {
+        downloadBudget(currentFileName);
+        return;
+      }
+      return saveAsBudget();
+    }
+    function applyBudgetText(text) {
+      const snap = JSON.parse(text);
+      if (!snap || typeof snap !== 'object' || !snap.inputs || !snap.arrays) {
+        throw new Error('El archivo no es un presupuesto de Presupuest-Arg.');
+      }
+      applyProjectSnapshotToWorkspace(snap);
+      currentWorkId = snap.id || null;
+    }
+    async function openBudget() {
+      if (workDirty && !confirm('Hay cambios sin guardar. ¿Abrir otro presupuesto de todos modos?')) return;
+      if (canPickFiles()) {
+        try {
+          const [handle] = await window.showOpenFilePicker({ types: BUDGET_FILE_TYPES });
+          applyBudgetText(await (await handle.getFile()).text());
+          currentFileHandle = handle;
+          currentFileName = handle.name;
+          markBudgetSaved();
+        } catch (err) {
+          if (err && err.name === 'AbortError') return;
+          alert('No se pudo abrir el archivo. Verificá que sea un presupuesto de Presupuest-Arg.');
+        }
+        return;
+      }
+      document.getElementById('budgetFileInput').click();
+    }
+    function onBudgetFileChosen(event) {
+      const input = event.target;
+      const file = input.files && input.files[0];
+      if (!file) return;
+      file.text()
+        .then(text => {
+          applyBudgetText(text);
+          currentFileHandle = null;
+          currentFileName = file.name;
+          markBudgetSaved();
+        })
+        .catch(() => alert('No se pudo abrir el archivo. Verificá que sea un presupuesto de Presupuest-Arg.'))
+        .finally(() => { input.value = ''; });
+    }
+    function newBudget() {
+      if (workDirty && !confirm('Hay cambios sin guardar. ¿Empezar un presupuesto nuevo y descartarlos?')) return;
+      localStorage.removeItem(WORK_STORAGE_KEY);
+      location.reload();
+    }
+    document.addEventListener('keydown', e => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      const k = e.key.toLowerCase();
+      if (k === 's') { e.preventDefault(); saveBudget(); }
+      if (k === 'o') { e.preventDefault(); openBudget(); }
+    });
 
     window.addEventListener('DOMContentLoaded', () => {
       const dateInput = document.getElementById('projDate');
@@ -5232,6 +5386,7 @@
       fetchDolarHoyRate(false);
       renderIconsSafe();
       restoreWorkFromStorage();
+      updateFileBar();
     });
   </script>
   <script>
